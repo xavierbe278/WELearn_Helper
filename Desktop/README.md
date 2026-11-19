@@ -6,7 +6,7 @@ Windows 桌面启动器：启动本地 PHP Web 控制台，并自动打开浏览
 
 - Windows 10/11；
 - Python 3.10+；
-- PHP 7.4+（`php.exe` 在 PATH 中，或放在 `Desktop/php/php.exe`，或在界面里手动选择）。
+- PHP 7.4+（`php.exe` 在 PATH 中，或放在 `Desktop/php/php.exe`，或在界面里手动选择）；根目录 `启动.bat` 会在缺失时自动下载便携版。
 
 ## 启动
 
