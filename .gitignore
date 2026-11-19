@@ -1,8 +1,13 @@
 # runtime data
-data/
-stats.json
+Web/data/
+Web/stats.json
 
-# local secrets / editor files
+# Python
+Desktop/__pycache__/
+__pycache__/
+*.pyc
+
+# local / editor
 .env
 *.local
 .idea/
