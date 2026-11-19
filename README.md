@@ -4,8 +4,8 @@
 >
 > 当前是独立的 **PHP Web 控制台 + Windows 桌面启动器**，目录结构、服务端能力、版本线均已与上游分离。上游的 `index.html + 根目录 app.js` 方案不能直接套用，后续上游更新也不能直接合并。
 
-- 当前版本：**v2.4.1**
-- 构建：`2026.11.19-57`
+- 当前版本：**v2.4.2**
+- 构建：`2026.11.19-58`
 - 运行形态：`PHP + 原生 JavaScript + Python 桌面启动器`
 - 仓库：`xavierbe278/WELearn_Helper`
 
@@ -21,18 +21,37 @@ WELearn_Helper/
 │   ├── js/
 │   ├── lib/
 │   ├── admin/
+│   ├── start.bat        Web 一键启动（需要 PHP）
 │   └── data/            运行数据，不提交到 Git
 ├── Desktop/              Windows 桌面启动器
 │   ├── wlearn_helper.py
 │   ├── start.bat
+│   ├── php/              可选：便携版 PHP
 │   └── README.md
+├── 启动.bat              一键启动（优先桌面版，失败回退 Web）
 ├── README.md
 └── LICENSE
 ```
 
+## 一键启动
+
+双击项目根目录：
+
+```text
+启动.bat
+```
+
+它会优先启动 `Desktop/wlearn_helper.py`；如果本机没有 Python，则回退到 `Web/start.bat` 直接启动 PHP。
+
+默认地址：
+
+```text
+http://127.0.0.1:5566/
+```
+
 ## 电脑版
 
-桌面启动器使用 **Python 3.10+ + tkinter**，负责：
+桌面启动器使用 **Python 3.10+ + tkinter**，默认端口 **5566**，负责：
 
 - 查找 Web 目录；
 - 查找本机 PHP；
@@ -59,7 +78,7 @@ python Desktop/wlearn_helper.py
 
 ## Web 版
 
-Web 目录可以单独部署到 PHP 服务器：
+Web 目录可以单独部署到 PHP 服务器，也可以直接双击 `Web/start.bat` 在本机运行：
 
 - PHP 7.4+；
 - `curl`、`openssl`、`mbstring`；
@@ -99,7 +118,7 @@ Web 目录可以单独部署到 PHP 服务器：
 | 任务 | 正确率 / 时长 | 正确率、时长、混合刷、一键完成断点续刷 |
 | 维护 | 无 | 维护模式 + 管理员 token 自动续期 |
 | 桌面版 | 无 | `Desktop/` Python 启动器 |
-| 版本 | 跟随上游 | 独立版本线，从 `v2.4.1` 继续 |
+| 版本 | 跟随上游 | 独立版本线，从 `v2.4.2` 继续 |
 
 ## 上游参考
 

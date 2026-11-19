@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
 
-$APP_VERSION = 'v2.4.1';
-$APP_BUILD = '2026.11.19-57';
+$APP_VERSION = 'v2.4.2';
+$APP_BUILD = '2026.11.19-58';
 
 header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');

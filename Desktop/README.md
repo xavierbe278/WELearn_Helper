@@ -1,6 +1,6 @@
 # WELearn Helper Desktop
 
-Windows 桌面启动器：启动本地 PHP Web 控制台，并自动打开浏览器。
+Windows 桌面启动器：启动本地 PHP Web 控制台，并自动打开浏览器。默认端口 5566。
 
 ## 需要
 
