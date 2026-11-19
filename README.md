@@ -41,7 +41,7 @@ WELearn_Helper/
 启动.bat
 ```
 
-它会优先启动 `Desktop/wlearn_helper.py`；如果本机没有 Python，则回退到 `Web/start.bat` 直接启动 PHP。
+它会优先启动 `Desktop/wlearn_helper.py`；如果本机没有 PHP，会尝试下载便携版 PHP 到 `Desktop/php`；如果本机没有 Python，则回退到 `Web/start.bat` 直接启动 PHP。
 
 默认地址：
 
@@ -58,7 +58,7 @@ http://127.0.0.1:5566/
 - 在 `127.0.0.1` 启动 PHP 内置服务器；
 - 自动打开默认浏览器；
 - 停止 / 重新打开本地服务；
-- 没有 PHP 时允许手动选择 `php.exe`。
+- 没有 PHP 时自动下载便携版，或手动选择 `php.exe`。
 
 启动：
 
