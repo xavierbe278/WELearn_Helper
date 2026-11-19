@@ -23,7 +23,7 @@ import webbrowser
 from pathlib import Path
 
 APP_NAME = "WELearn Helper"
-APP_VERSION = "v2.4.2"
+APP_VERSION = "v2.4.3"
 DEFAULT_PORT = 5566
 
 ROOT = Path(__file__).resolve().parent.parent

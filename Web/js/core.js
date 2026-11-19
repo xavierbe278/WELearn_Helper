@@ -12,8 +12,8 @@
   'use strict';
 
   var BUILD = 'server';
-  var VERSION = '2.4.2';
-  var BUILD_ID = '2026.11.19-58';
+  var VERSION = '2.4.3';
+  var BUILD_ID = '2026.11.19-59';
 
   /* 给 api.php 也带版本号，避免 CDN / 反向代理返回旧的接口响应 */
   var API_ENDPOINT = 'api.php?v=' + encodeURIComponent(BUILD_ID);

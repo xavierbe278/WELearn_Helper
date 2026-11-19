@@ -18,7 +18,7 @@ if %errorlevel% neq 0 (
 
 :run
 if not exist "data" mkdir "data"
-set "PORT=5566"
+set "PORT=80"
 echo.
 echo WELearn Helper Web
 echo http://127.0.0.1:%PORT%/
