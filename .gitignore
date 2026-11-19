@@ -1,0 +1,11 @@
+# runtime data
+data/
+stats.json
+
+# local secrets / editor files
+.env
+*.local
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

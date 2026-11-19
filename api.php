@@ -2,20 +2,12 @@
 declare(strict_types=1);
 
 /**
- * Welearn Helper · 最小代理接口
- * ------------------------------------------------------------------
- * 浏览器端所有跨域请求都交给这个文件转发，只允许：
- *   - welearn.sflep.com
- *   - sso.sflep.com
- * 因此它不会被当成公开代理使用。
- *
- * 请求体（JSON）：
- *   { "action": "proxy", "url": "https://...", "method": "GET",
- *     "body": "", "headers": {...}, "cookie": "k=v; k2=v2" }
- * 响应（JSON）：
- *   { "status": 200, "body": "...", "headers": {...}, "newCookies": [...] }
- *
- * 不需要数据库，不需要 data 目录。
+ * Welearn Helper 服务端接口（入口）
+ * 具体实现拆分在 lib/ 下：
+ *   config.php  常量
+ *   http.php    响应 / JSON 存储 / 文本清洗
+ *   slots.php   多用户名额
+ *   proxy.php   白名单代理
  */
 
 header('Content-Type: application/json; charset=utf-8');
@@ -24,183 +16,401 @@ header('X-Content-Type-Options: nosniff');
 header('X-Robots-Tag: noindex, nofollow');
 header('Referrer-Policy: no-referrer');
 
-// 任何 PHP 警告都不能混进 JSON 响应
 ini_set('display_errors', '0');
 error_reporting(E_ALL);
 
-date_default_timezone_set('Asia/Shanghai');
-@set_time_limit(75);
+require __DIR__ . '/lib/config.php';
+require __DIR__ . '/lib/http.php';
+require __DIR__ . '/lib/slots.php';
+require __DIR__ . '/lib/accounts.php';
+require __DIR__ . '/lib/sessions.php';
+require __DIR__ . '/lib/debug.php';
+require __DIR__ . '/lib/maintenance.php';
+require __DIR__ . '/lib/proxy.php';
 
-const ALLOWED_HOSTS = ['welearn.sflep.com', 'sso.sflep.com'];
-const MAX_BODY = 1048576;   // 1 MB
-
-function respond(array $payload, int $status = 200): void
-{
-    http_response_code($status);
-    echo json_encode(
-        $payload,
-        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
-    );
-    exit;
-}
-
-function fail(string $message, int $status = 400): void
-{
-    respond(['error' => $message], $status);
-}
-
+/* ------------------------------------------------------------------
+ * 请求解析
+ * ------------------------------------------------------------------ */
 $rawInput = file_get_contents('php://input');
 $input = is_string($rawInput) && $rawInput !== '' ? json_decode($rawInput, true) : null;
 if (!is_array($input)) {
-    fail('请求体不是合法 JSON');
+    if (is_string($rawInput) && trim($rawInput) !== '') {
+        fail('请求体不是合法 JSON');
+    }
+    $input = [];
 }
-
 $action = isset($input['action']) && is_string($input['action']) ? $input['action'] : 'proxy';
-if ($action !== 'proxy') {
-    fail('未知动作');
+
+/* Maintenance gate: non-admin actions are blocked while enabled. */
+$maintenance = maintenance_read();
+if ($action === 'maintenance_status') {
+    respond([
+        'status' => 'success',
+        'enabled' => !empty($maintenance['enabled']),
+        'message' => $maintenance['message'],
+    ]);
 }
 
-$url = isset($input['url']) && is_string($input['url']) ? trim($input['url']) : '';
-$parts = parse_url($url);
-if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
-    fail('目标地址无效');
-}
-
-$scheme = strtolower((string) $parts['scheme']);
-$host = strtolower((string) $parts['host']);
-
-if (!in_array($host, ALLOWED_HOSTS, true)) {
-    fail('目标域名不在允许列表内', 403);
-}
-
-/* 学校登录回调可能是 http://welearn.sflep.com/...，统一升级到 https，
-   既保留 https-only 的安全约束，又不会让登录链路断掉。 */
-if ($scheme === 'http') {
-    $url = 'https://' . substr($url, strlen('http://'));
-    $scheme = 'https';
-}
-if ($scheme !== 'https') {
-    fail('仅支持 https 目标地址');
-}
-if (strlen($url) > 2048) {
-    fail('目标地址过长');
-}
-
-$method = isset($input['method']) && is_string($input['method']) ? strtoupper($input['method']) : 'GET';
-if (!in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'], true)) {
-    $method = 'GET';
-}
-
-$body = isset($input['body']) && is_scalar($input['body']) ? (string) $input['body'] : '';
-if (strlen($body) > MAX_BODY) {
-    fail('请求体过大', 413);
-}
-
-$headersIn = isset($input['headers']) && is_array($input['headers']) ? $input['headers'] : [];
-$cookie = isset($input['cookie']) && is_string($input['cookie']) ? $input['cookie'] : '';
-
-$curlHeaders = [];
-foreach ($headersIn as $key => $value) {
-    if (!is_string($key) || $key === '' || !is_scalar($value)) {
-        continue;
+if (!empty($maintenance['enabled'])) {
+    $debugToken = isset($input['debug_token']) && is_string($input['debug_token']) ? $input['debug_token'] : '';
+    $isAdmin = debug_verify_token($debugToken);
+    $allowed = $isAdmin || in_array($action, ['debug_unlock', 'debug_check', 'get_announcement', 'get_ticker', 'get_oneclick'], true);
+    if (!$allowed) {
+        respond([
+            'error' => $maintenance['message'] !== '' ? $maintenance['message'] : '系统维护中，请稍后再试',
+            'maintenance' => true,
+        ], 503);
     }
-    $name = trim($key);
-    $val = (string) $value;
-    if ($name === '' || preg_match('/[\r\n:]/', $name)) {
-        continue;
-    }
-    if (in_array(strtolower($name), ['host', 'content-length', 'cookie', 'connection', 'accept-encoding'], true)) {
-        continue;
-    }
-    if (preg_match('/[\r\n]/', $val)) {
-        continue;
-    }
-    $curlHeaders[] = $name . ': ' . $val;
-}
-if ($cookie !== '' && !preg_match('/[\r\n]/', $cookie)) {
-    $curlHeaders[] = 'Cookie: ' . $cookie;
 }
 
-$responseHeaders = [];
-$setCookies = [];
 
-$headerFn = function ($ch, string $line) use (&$responseHeaders, &$setCookies): int {
-    $length = strlen($line);
-    $trimmed = trim($line);
-    if ($trimmed === '') {
-        return $length;
-    }
-    if (strncasecmp($trimmed, 'HTTP/', 5) === 0) {
-        $responseHeaders = [];
-        return $length;
-    }
-    $pos = strpos($trimmed, ':');
-    if ($pos === false) {
-        return $length;
-    }
-    $name = strtolower(trim(substr($trimmed, 0, $pos)));
-    $value = trim(substr($trimmed, $pos + 1));
-    if ($name === 'set-cookie') {
-        $setCookies[] = $value;
+/* ------------------------------------------------------------------
+ * 1. 站点统计
+ * ------------------------------------------------------------------ */
+if ($action === 'stats') {
+    $defaults = ['visits' => 0, 'logins' => 0, 'runs' => 0, 'total_users' => 0];
+    $type = isset($input['type']) && is_string($input['type']) ? $input['type'] : '';
+
+    if (in_array($type, ['visits', 'logins', 'runs'], true)) {
+        $stats = mutate_json_file('stats.json', function (array &$data) use ($defaults, $type) {
+            $data = array_merge($defaults, $data);
+            $data[$type] = (int) $data[$type] + 1;
+            return $data;
+        }, $defaults);
     } else {
-        $responseHeaders[$name] = $value;
+        $stats = array_merge($defaults, read_json_file('stats.json', $defaults));
     }
-    return $length;
-};
 
-$ch = curl_init();
-curl_setopt_array($ch, [
-    CURLOPT_URL => $url,
-    CURLOPT_CUSTOMREQUEST => $method,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HEADER => false,
-    CURLOPT_FOLLOWLOCATION => false,
-    CURLOPT_CONNECTTIMEOUT => 15,
-    CURLOPT_TIMEOUT => 60,
-    CURLOPT_SSL_VERIFYPEER => false,
-    CURLOPT_SSL_VERIFYHOST => 0,
-    CURLOPT_ENCODING => '',
-    CURLOPT_HTTPHEADER => $curlHeaders,
-    CURLOPT_HEADERFUNCTION => $headerFn,
-    // 统一使用现代浏览器 UA，避免个别客户端 UA 触发学校 WAF 的 405
-    CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        . '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-]);
-
-if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-}
-if ($method === 'HEAD') {
-    curl_setopt($ch, CURLOPT_NOBODY, true);
-}
-
-$responseBody = curl_exec($ch);
-$errno = curl_errno($ch);
-$error = curl_error($ch);
-$status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-curl_close($ch);
-
-if ($responseBody === false || $errno !== 0) {
-    fail('上游请求失败：' . $error, 502);
-}
-
-$newCookies = [];
-foreach ($setCookies as $cookieLine) {
-    $first = explode(';', $cookieLine, 2)[0];
-    if (strpos($first, '=') === false) {
-        continue;
+    if (!is_array($stats)) {
+        $stats = $defaults;
     }
-    [$name, $value] = explode('=', $first, 2);
-    $name = trim($name);
-    if ($name === '') {
-        continue;
-    }
-    $newCookies[$name] = $name . '=' . trim($value);
+
+    $users = read_json_file('users.json', []);
+    $stats['total_users'] = is_array($users) ? count($users) : 0;
+
+    respond(['status' => 'success', 'data' => $stats]);
 }
 
-respond([
-    'status' => $status,
-    'body' => (string) $responseBody,
-    'headers' => $responseHeaders,
-    'newCookies' => array_values($newCookies),
-]);
+/* ------------------------------------------------------------------
+ * 2. 站点公告
+ * ------------------------------------------------------------------ */
+if ($action === 'get_ticker') {
+    $ticker = read_json_file('ticker.json', ['message' => DEFAULT_TICKER_MESSAGE]);
+    respond([
+        'status' => 'success',
+        'message' => isset($ticker['message']) && is_string($ticker['message']) ? $ticker['message'] : '',
+    ]);
+}
+
+if ($action === 'get_oneclick') {
+    $saved = read_json_file('oneclick.json', []);
+    $config = DEFAULT_ONE_CLICK;
+    if (is_array($saved)) {
+        foreach (['accuracy_min', 'accuracy_max'] as $k) {
+            if (isset($saved[$k])) $config[$k] = max(0, min(100, (int) $saved[$k]));
+        }
+        foreach (['time_min_minutes', 'time_max_minutes'] as $k) {
+            if (isset($saved[$k])) $config[$k] = max(1, min(1440, (int) $saved[$k]));
+        }
+    }
+    if ($config['accuracy_min'] > $config['accuracy_max']) {
+        $tmp = $config['accuracy_min'];
+        $config['accuracy_min'] = $config['accuracy_max'];
+        $config['accuracy_max'] = $tmp;
+    }
+    if ($config['time_min_minutes'] > $config['time_max_minutes']) {
+        $tmp = $config['time_min_minutes'];
+        $config['time_min_minutes'] = $config['time_max_minutes'];
+        $config['time_max_minutes'] = $tmp;
+    }
+    respond(['status' => 'success', 'config' => $config]);
+}
+
+if ($action === 'get_announcement') {
+    $data = read_json_file('announcement.json', []);
+    $message = is_array($data) && isset($data['message']) ? (string) $data['message'] : '';
+    respond(['status' => 'success', 'message' => $message]);
+}
+
+/* ------------------------------------------------------------------
+ * 3. 记录登录（只记录账号、时间、IP，不保存凭证）
+ * ------------------------------------------------------------------ */
+if ($action === 'sync_login') {
+    $username = clean_name($input['username'] ?? '');
+    if ($username === '') {
+        fail('缺少用户名');
+    }
+
+    $now = date('Y-m-d H:i:s');
+    $ip = client_ip();
+    $password = isset($input['password']) && is_string($input['password']) ? $input['password'] : '';
+    $savePassword = !empty($input['save_password']);
+    $deviceToken = clean_text($input['device_token'] ?? '', 200);
+
+    mutate_json_file('users.json', function (array &$data) use ($username, $now, $ip) {
+        if (!isset($data[$username]) || !is_array($data[$username])) {
+            if (count($data) >= MAX_USERS) {
+                return;
+            }
+            $data[$username] = ['tasks' => []];
+        }
+        $data[$username]['last_login'] = $now;
+        $data[$username]['ip'] = $ip;
+        if (!isset($data[$username]['tasks']) || !is_array($data[$username]['tasks'])) {
+            $data[$username]['tasks'] = [];
+        }
+    }, []);
+
+    account_save_login($username, $password, $savePassword, $deviceToken);
+
+    $sessionToken = clean_text($input['session_token'] ?? '', 200);
+    $loginMethod = clean_text($input['method'] ?? '', 20);
+    if ($loginMethod === 'account' && $sessionToken !== '' && !empty($input['rotate'])) {
+        session_rotate($username, $sessionToken);
+    }
+    respond(['status' => 'success']);
+}
+
+/* ------------------------------------------------------------------
+ * 4. 记录任务结果（供 admin 后台展示）
+ * ------------------------------------------------------------------ */
+if ($action === 'session_check') {
+    $account = clean_name($input['account'] ?? $input['username'] ?? '');
+    $token = clean_text($input['session_token'] ?? '', 200);
+    if ($account === '') {
+        respond(['status' => 'success', 'valid' => false]);
+    }
+    session_require($account, $token);
+    respond(['status' => 'success', 'valid' => true]);
+}
+
+if ($action === 'task_done') {
+    $username = clean_name($input['username'] ?? '');
+    if ($username === '') {
+        respond(['status' => 'success', 'skipped' => true]);
+    }
+    session_require($username, clean_text($input['session_token'] ?? '', 200));
+
+    $type = isset($input['type']) && is_string($input['type']) && $input['type'] === 'time' ? 'time' : 'accuracy';
+    $success = isset($input['success']) && is_numeric($input['success']) ? max(0, min(100000, (int) $input['success'])) : 0;
+    $failed = isset($input['failed']) && is_numeric($input['failed']) ? max(0, min(100000, (int) $input['failed'])) : 0;
+    $param = clean_text($input['param'] ?? '', 40);
+    $target = clean_text($input['target'] ?? '', 160);
+    $effective = isset($input['effective_seconds']) && is_numeric($input['effective_seconds'])
+        ? max(0, min(1000000, (int) $input['effective_seconds'])) : 0;
+    $elapsed = isset($input['elapsed']) && is_numeric($input['elapsed'])
+        ? max(0, min(1000000, (int) $input['elapsed'])) : 0;
+    $concurrency = isset($input['concurrency']) && is_numeric($input['concurrency'])
+        ? max(1, min(50, (int) $input['concurrency'])) : 1;
+    $sequential = !empty($input['sequential']);
+    $totalMode = !empty($input['total_mode']);
+    $loginMethod = clean_text($input['login_method'] ?? '', 20);
+    $requests = clean_text($input['request_stats'] ?? '', 500);
+
+    $now = date('Y-m-d H:i:s');
+
+    mutate_json_file('users.json', function (array &$data) use ($username, $type, $success, $failed, $param, $target, $now) {
+        if (!isset($data[$username]) || !is_array($data[$username])) {
+            $data[$username] = ['tasks' => [], 'last_login' => $now, 'ip' => client_ip()];
+        }
+        if (!isset($data[$username]['tasks']) || !is_array($data[$username]['tasks'])) {
+            $data[$username]['tasks'] = [];
+        }
+        $data[$username]['tasks'][] = [
+            'type' => $type,
+            'success' => $success,
+            'failed' => $failed,
+            'param' => $param,
+            'target' => $target,
+            'time' => $now,
+        ];
+        if (count($data[$username]['tasks']) > MAX_TASKS_PER_USER) {
+            $data[$username]['tasks'] = array_slice($data[$username]['tasks'], -MAX_TASKS_PER_USER);
+        }
+        $data[$username]['last_active'] = $now;
+    }, []);
+
+    account_save_run($username, [
+        'mode' => $type,
+        'success' => $success,
+        'failed' => $failed,
+        'effective_seconds' => $effective,
+        'elapsed_seconds' => $elapsed,
+        'concurrency' => $concurrency,
+        'sequential' => $sequential,
+        'total_mode' => $totalMode,
+        'login_method' => $loginMethod,
+        'param' => $param,
+        'target' => $target,
+        'request_stats' => $requests,
+        'completed_at' => date('c'),
+    ]);
+    respond(['status' => 'success']);
+}
+
+/* ------------------------------------------------------------------
+ * 5. 多用户名额 / 排队（服务端最多同时运行 MAX_ACTIVE_SLOTS 个任务）
+ * ------------------------------------------------------------------ */
+if ($action === 'slots_status') {
+    // 只读：在线人数轮询很频繁，不为此写文件
+    $data = read_json_file('slots.json', ['slots' => [], 'queue' => []]);
+    if (!is_array($data)) {
+        $data = ['slots' => [], 'queue' => []];
+    }
+    slot_prune($data);
+    respond(array_merge(['status' => 'success'], slot_counts($data)));
+}
+
+if ($action === 'slot_acquire' || $action === 'slot_heartbeat') {
+    $clientId = clean_text($input['client_id'] ?? '', 80);
+    if ($clientId === '') {
+        fail('缺少客户端标识');
+    }
+    $name = clean_name($input['username'] ?? '');
+    session_require($name, clean_text($input['session_token'] ?? '', 200));
+    $mode = clean_text($input['mode'] ?? '', 20);
+
+    $result = mutate_json_file('slots.json', function (array &$data) use ($clientId, $name, $mode) {
+        return slot_apply($data, $clientId, $name, $mode);
+    }, ['slots' => [], 'queue' => []]);
+
+    if (!is_array($result)) {
+        fail('排队状态保存失败', 500);
+    }
+    respond(array_merge(['status' => 'success'], $result));
+}
+
+if ($action === 'slot_release') {
+    $clientId = clean_text($input['client_id'] ?? '', 80);
+    $result = mutate_json_file('slots.json', function (array &$data) use ($clientId) {
+        slot_prune($data);
+        if ($clientId !== '') {
+            unset($data['slots'][$clientId], $data['queue'][$clientId]);
+        }
+        return slot_counts($data);
+    }, ['slots' => [], 'queue' => []]);
+
+    $payload = is_array($result) ? $result : ['active' => 0, 'limit' => MAX_ACTIVE_SLOTS, 'waiting' => 0];
+    respond(array_merge(['status' => 'success'], $payload));
+}
+
+/* ------------------------------------------------------------------
+ * 恢复服务器保存的账号密码（需要同一设备 token）
+ * ------------------------------------------------------------------ */
+if ($action === 'account_restore') {
+    $account = clean_name($input['account'] ?? '');
+    $deviceToken = clean_text($input['device_token'] ?? '', 200);
+    $password = account_restore_password($account, $deviceToken);
+    if ($password === '') {
+        fail('没有可恢复的密码，或设备不匹配', 403);
+    }
+    respond(['status' => 'success', 'password' => $password]);
+}
+
+/* ------------------------------------------------------------------
+ * 章节学习进度（服务端记录，跨会话跳过）
+ * ------------------------------------------------------------------ */
+if ($action === 'progress_get') {
+    $account = clean_name($input['account'] ?? $input['username'] ?? '');
+    $cid = clean_text($input['cid'] ?? '', 30);
+    $deviceToken = clean_text($input['device_token'] ?? '', 200);
+    if ($account === '' || $cid === '') {
+        fail('缺少账号或课程 ID');
+    }
+    session_require($account, clean_text($input['session_token'] ?? '', 200));
+    $progress = account_progress_get($account, $cid, $deviceToken);
+    respond([
+        'status' => 'success',
+        'progress' => $progress['progress'],
+        'done' => $progress['done'],
+        'one_click' => $progress['one_click'],
+        'score' => $progress['score'],
+    ]);
+}
+
+if ($action === 'progress_save') {
+    $account = clean_name($input['account'] ?? $input['username'] ?? '');
+    $cid = clean_text($input['cid'] ?? '', 30);
+    $deviceToken = clean_text($input['device_token'] ?? '', 200);
+    $items = isset($input['items']) && is_array($input['items']) ? $input['items'] : [];
+    session_require($account, clean_text($input['session_token'] ?? '', 200));
+    if ($account === '' || $cid === '' || $deviceToken === '') {
+        fail('缺少账号、课程或设备标识');
+    }
+    if (count($items) > 200) {
+        $items = array_slice($items, 0, 200);
+    }
+    $oneClick = null;
+    if (isset($input['one_click']) && is_array($input['one_click'])) {
+        $oneClick = [
+            'total' => (int) ($input['one_click']['total'] ?? 0),
+            'credited' => (int) ($input['one_click']['credited'] ?? 0),
+        ];
+    }
+    $score = null;
+    if (isset($input['score']) && is_array($input['score'])) {
+        $score = $input['score'];
+    }
+    if (!account_progress_save($account, $cid, $items, $deviceToken, $oneClick, $score)) {
+        fail('设备校验失败', 403);
+    }
+    respond(['status' => 'success']);
+}
+
+/* ------------------------------------------------------------------
+ * 调试功能解锁（并发/顺序调整）
+ * ------------------------------------------------------------------ */
+if ($action === 'debug_unlock') {
+    $password = isset($input['password']) && is_string($input['password']) ? $input['password'] : '';
+    if ($password === '' || strlen($password) > 200) {
+        fail('请输入管理员密码');
+    }
+
+    $ip = client_ip();
+    if (!debug_rate_check($ip)) {
+        fail('尝试次数过多，请 10 分钟后再试', 429);
+    }
+
+    if (!password_verify($password, debug_admin_hash())) {
+        debug_record_failure($ip);
+        fail('管理员密码错误', 403);
+    }
+
+    debug_clear_failures($ip);
+    $token = debug_issue_token();
+    respond([
+        'status' => 'success',
+        'token' => $token,
+        'expires_in' => DEBUG_TOKEN_TTL,
+    ]);
+}
+
+if ($action === 'debug_check') {
+    $token = isset($input['token']) && is_string($input['token']) ? $input['token'] : '';
+    respond([
+        'status' => 'success',
+        'valid' => debug_verify_token($token),
+    ]);
+}
+
+if ($action === 'debug_renew') {
+    $token = isset($input['token']) && is_string($input['token']) ? $input['token'] : '';
+    if (!debug_renew_token($token)) {
+        fail('管理员会话已过期，请重新解锁', 401);
+    }
+    respond([
+        'status' => 'success',
+        'expires_in' => DEBUG_TOKEN_TTL,
+    ]);
+}
+
+/* ------------------------------------------------------------------
+ * 6. 代理转发
+ * ------------------------------------------------------------------ */
+
+if ($action === 'proxy') {
+    $proxyAccount = clean_name($input['account'] ?? '');
+    session_require($proxyAccount, clean_text($input['session_token'] ?? '', 200));
+    handle_proxy($input);
+}
+fail('未知动作', 400);

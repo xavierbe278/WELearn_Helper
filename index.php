@@ -1,3 +1,13 @@
+<?php
+declare(strict_types=1);
+
+$APP_VERSION = 'v2.4.1';
+$APP_BUILD = '2026.11.19-57';
+
+header('Cache-Control: no-cache, no-store, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+?>
 <!doctype html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -6,7 +16,7 @@
   <title>Welearn Helper · WEB 刷课控制台</title>
   <meta name="description" content="Welearn Helper Web 控制台：账号或 Cookie 登录，按单元、按小节刷完成度与学习时长。" />
   <meta name="theme-color" content="#f3f6fa" />
-  <meta name="wl-build" content="2026.11.11-9" />
+  <meta name="wl-build" content="<?= $APP_BUILD ?>" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
@@ -15,14 +25,21 @@
   <!-- 主题必须在首屏渲染前确定，避免闪白 -->
   <script>
     (function () {
+      var theme = '';
       try {
-        var t = localStorage.getItem('wl_theme');
-        document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : 'light');
+        var manual = localStorage.getItem('wl_theme_manual') === '1';
+        var saved = localStorage.getItem('wl_theme');
+        if (manual && (saved === 'dark' || saved === 'light')) theme = saved;
       } catch (e) { /* 隐私模式下忽略 */ }
+      if (!theme) {
+        theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
     })();
   </script>
 
-  <link rel="stylesheet" href="styles.css?v=2026.11.11-9" />
+  <link rel="stylesheet" href="styles.css?v=<?= $APP_BUILD ?>" />
 </head>
 <body>
   <a class="skip" href="#main">跳到主要内容</a>
@@ -38,8 +55,8 @@
           </svg>
         </span>
         <div class="brand__text">
-          <div class="brand__title">Welearn Helper</div>
-          <div class="brand__sub">WE 刷课控制台 · 开源版 · 多单元 / 小节 / 并发</div>
+          <div class="brand__title">Welearn Helper <span class="brand__version"><?= $APP_VERSION ?></span></div>
+          <div class="brand__sub">WE 刷课控制台 · 开源学习网页工具</div>
         </div>
       </div>
 
@@ -50,7 +67,25 @@
         </span>
       </div>
 
+      <div class="score-strip is-locked" id="scorePanel" aria-label="课程成绩">
+        <div class="score-strip__total">
+          <span>成绩</span>
+          <b id="scoreTotal">—</b>
+        </div>
+        <div class="score-strip__items" id="scoreItems">
+          <span>听说 <b id="scoreListening">—</b></span>
+          <span>作文 <b id="scoreWriting">—</b></span>
+          <span>正确率 <b id="scoreCorrect">—</b></span>
+          <span>时长 <b id="scoreTime">—</b></span>
+          <span>进度 <b id="scoreProgress">—</b></span>
+        </div>
+        <span class="score-strip__hint" id="scoreHint">需要登录才能获取成绩</span>
+        <span class="score-strip__time" id="scoreUpdated" hidden>—</span>
+        <button class="btn btn--sm" id="scoreRefreshBtn" type="button" disabled>刷新</button>
+      </div>
+
       <div class="topbar__actions">
+        <span class="server-load" id="serverLoadBadge" title="正在刷课用户；服务器最多同时 8 个任务，超出请排队">刷课 <b id="serverLoadText">0/8</b></span>
         <span class="status-pill" id="statusPill" title="当前状态">
           <span class="status-pill__dot" aria-hidden="true"></span>
           <span id="statusText">待命</span>
@@ -71,6 +106,38 @@
         </button>
       </div>
     </header>
+
+    <!-- 顶部公告 LED：一次一条，从右到左 -->
+    <div class="announcement-ticker" id="announcementTicker" hidden>
+      <span class="announcement-ticker__label">公告</span>
+      <div class="announcement-ticker__viewport">
+        <span class="announcement-ticker__text" id="announcementTickerText"></span>
+      </div>
+    </div>
+
+    <!-- 站点统计（仅本站部署） -->
+    <section class="stats" aria-label="站点统计">
+      <div class="stats__hello" id="visitorGreeting">正在获取访问信息…</div>
+      <div class="stats__items">
+        <span class="stats__item"><span>总用户数</span><strong class="stats__value" id="statTotalUsers">—</strong><em class="stats__unit">人</em></span>
+        <span class="stats__sep" aria-hidden="true">·</span>
+        <span class="stats__item"><span>访问次数</span><strong class="stats__value" id="statVisits">—</strong><em class="stats__unit">次</em></span>
+        <span class="stats__sep" aria-hidden="true">·</span>
+        <span class="stats__item"><span>累计登录</span><strong class="stats__value" id="statLogins">—</strong><em class="stats__unit">次</em></span>
+        <span class="stats__sep" aria-hidden="true">·</span>
+        <span class="stats__item"><span>成功运行</span><strong class="stats__value" id="statRuns">—</strong><em class="stats__unit">次</em></span>
+        <span class="stats__sep" aria-hidden="true">·</span>
+        <span class="stats__item"><span>正在刷课用户</span><strong class="stats__value" id="statOnline">0</strong><em class="stats__unit">人</em></span>
+      </div>
+    </section>
+
+    <div class="maintenance-banner" id="maintenanceBanner" hidden>
+      <div class="maintenance-banner__text">
+        <strong>🛠️ 系统维护中</strong>
+        <span id="maintenanceText">仅管理员可用，请稍后再试。</span>
+      </div>
+      <button class="btn btn--sm" id="maintenanceUnlockBtn" type="button">管理员解锁</button>
+    </div>
 
     <main class="layout" id="main">
       <aside class="rail" id="rail">
@@ -107,8 +174,12 @@
                   </button>
                 </span>
               </label>
+              <label class="check" id="saveCredentialField">
+                <input type="checkbox" id="saveCredential" />
+                保存账号密码用于掉线自动重登（可选）
+              </label>
               <button class="btn btn--primary btn--block" id="loginBtn" type="button">登录并获取课程</button>
-              <p class="hint">密码只在你的浏览器中参与登录加密，不会被保存。</p>
+              <p class="hint">不勾选时密码只在本次页面内存中使用，不会上传；勾选后用于会话失效时自动重登，刷新页面后账号密码输入框会锁定并显示“已保存密码”。</p>
             </div>
 
             <div id="cookiePane" hidden>
@@ -181,20 +252,88 @@
             <h2 class="card__title">任务参数</h2>
           </div>
           <div class="card__body">
-            <div class="task-grid">
               <div class="field">
                 <span class="field__label">任务模式</span>
+                <p class="mode-hint" id="modeHint">刷完成度正确率：只提交答案和上报完成度，不刷学习时长。两个都要刷请选「混合刷」，或直接点「一键完成」。</p>
                 <div class="segmented" role="tablist" aria-label="任务模式">
                   <button class="seg is-active" type="button" data-mode="accuracy" role="tab" aria-selected="true">刷完成度正确率</button>
                   <button class="seg" type="button" data-mode="time" role="tab" aria-selected="false">刷学习时长</button>
+                  <button class="seg" type="button" data-mode="mixed" role="tab" aria-selected="false">混合刷</button>
                 </div>
               </div>
-              <div class="field">
+              <div class="field" id="paramField">
                 <span class="field__label" id="paramLabel">正确率（0–99，单个值或区间）</span>
-                <input id="paramInput" type="text" inputmode="numeric" placeholder="例如 96 或 94,100" autocomplete="off" spellcheck="false" />
+                <div class="total-input-row">
+                  <input id="paramInput" type="text" inputmode="numeric" placeholder="例如 96 或 94,100" autocomplete="off" spellcheck="false" />
+                  <select id="totalUnit" aria-label="学习时长单位" hidden>
+                    <option value="sec" selected>秒</option>
+                    <option value="min">分钟</option>
+                    <option value="hour">小时</option>
+                  </select>
+                </div>
                 <div class="presets" id="presetRow">
                   <span class="presets__label">常用：</span>
                 </div>
+                <div class="presets" id="totalPresets" hidden>
+                  <span class="presets__label">常用：</span>
+                  <button class="chip" type="button" data-total="30" data-unit="min">30 分钟</button>
+                  <button class="chip" type="button" data-total="1" data-unit="hour">1 小时</button>
+                  <button class="chip" type="button" data-total="2" data-unit="hour">2 小时</button>
+                  <button class="chip" type="button" data-total="225" data-unit="min">3 小时 45 分</button>
+                </div>
+                <p class="hint" id="accuracyHint">范围值按上限参考，例如 96–100 会按 100 提交；固定值无法精确匹配时自动取 100。</p>
+                <p class="hint" id="totalHint" hidden>反向匹配：输入的是总时长，按当前勾选的可见小节分配；单位默认秒。</p>
+              </div>
+
+            <div class="field" id="mixedAccuracyField" hidden>
+              <span class="field__label">混合刷正确率（0–100，单个值或区间）</span>
+              <input id="mixedAccuracy" type="text" inputmode="numeric" value="99" placeholder="例如 99 或 96,100" autocomplete="off" spellcheck="false" />
+              <p class="hint">每个小节先刷时长，再按此正确率提交；范围值按上限执行。</p>
+            </div>
+
+            <input type="checkbox" id="totalMode" hidden />
+
+            <div class="reverse-row" id="reverseRow" hidden>
+              <button class="btn btn--sm btn--reverse" id="totalPreviewBtn" type="button" aria-pressed="false">反向匹配</button>
+              <span class="hint">正向：每小节时长；反向：总时长自动分配。输入框和单位在同一个位置切换。</span>
+            </div>
+
+            <div class="task-options" id="taskOptions">
+              <div class="task-group">
+                <label class="check" id="assessmentOnlyField">
+                  <input type="checkbox" id="assessmentOnly" checked />
+                  只刷考核小节
+                </label>
+                <button class="btn btn--sm" id="detectAssessmentBtn" type="button">检测考核内容</button>
+              </div>
+
+              <div class="task-group">
+                <label class="check task-inline" id="skipLearnedField">
+                  <input type="checkbox" id="skipLearned" checked />
+                  已学够
+                  <input id="skipLearnedMin" type="number" min="1" max="120" value="5" />
+                  分钟跳过
+                </label>
+
+                <label class="check" id="skipAnsweredField">
+                  <input type="checkbox" id="skipAnswered" checked />
+                  已有答题记录跳过
+                </label>
+              </div>
+
+              <div class="task-group" id="realAnswerGroup">
+                <label class="check" id="realAnswerField">
+                  <input type="checkbox" id="realAnswer" checked />
+                  自动填入真实答案
+                </label>
+
+                <label class="task-inline task-inline--fallback" id="realFallbackField">
+                  <span>异常时</span>
+                  <select id="realFallback">
+                    <option value="skip">不提交</option>
+                    <option value="legacy">旧方法提交</option>
+                  </select>
+                </label>
               </div>
             </div>
 
@@ -210,15 +349,23 @@
                   <span class="field__label">并发章节数（1–50）</span>
                   <input id="concurrency" type="number" min="1" max="50" step="1" value="10" />
                 </label>
+                <label class="check" id="sequentialField">
+                  <input type="checkbox" id="sequentialTime" checked />
+                  顺序刷时长（一章完成再开下一章，推荐）
+                </label>
                 <label class="check" id="skipDoneField">
                   <input type="checkbox" id="skipDone" checked />
                   仅处理未完成小节（取消可覆盖已有成绩）
                 </label>
-                <p class="hint" style="margin-top:0">并发越大完成越快，建议 10–20；过高可能触发平台限流或超过服务器 PHP 进程数。实际并发还受浏览器同源连接数限制。</p>
+                <div class="debug-lock" id="debugLock">
+                  <span id="debugStatus">🔒 并发 / 顺序设置已锁定</span>
+                  <button class="btn btn--sm" id="debugUnlockBtn" type="button">管理员解锁</button>
+                </div>
+                <p class="hint" style="margin-top:0">默认 10，最大 50。开启“顺序刷时长”时实际并发固定为 1，章间随机停 3–10 秒；关闭后才使用上面的并发数。过高可能触发平台限流。</p>
               </div>
             </details>
 
-            <p class="hint" style="margin-top:10px">不想逐项设置？可直接点「一键完成」：正确率 96–100%，时长 480–580 秒。注意：时长阶段必须真实等待，不能提前提交。</p>
+            <p class="hint" id="oneClickHint" style="margin-top:10px">不想逐项设置？可直接点「一键完成」：按小节先刷时长再刷正确率，正确率和总时长按后台配置，可中断，下次继续剩余小节。注意：时长阶段必须真实等待。</p>
           </div>
         </section>
 
@@ -233,7 +380,7 @@
           </div>
           <span class="runbar__eta" id="etaText"></span>
           <div class="runbar__actions">
-            <button class="btn btn--oneclick" id="oneClickBtn" type="button" disabled title="无需填写参数：正确率 96–100%，时长 480–580 秒">一键完成</button>
+            <button class="btn btn--oneclick" id="oneClickBtn" type="button" disabled title="按小节先刷时长再刷正确率，可中断续刷；参数按后台配置">一键完成</button>
             <button class="btn btn--run" id="startBtn" type="button" disabled>开始任务</button>
             <button class="btn btn--danger" id="stopBtn" type="button" hidden>停止</button>
           </div>
@@ -260,12 +407,18 @@
 
     <footer class="footer">
       <div>
-        原项目 <a href="https://github.com/Avenshy" target="_blank" rel="noreferrer">Avenshy</a> &amp; SSmJaE ·
-        维护 <a href="https://github.com/YZBRH/" target="_blank" rel="noreferrer">YZBRH</a> /
-        <a href="https://github.com/lxbsdsg/" target="_blank" rel="noreferrer">lxbsdsg</a>
+        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">桂ICP备2026010200号-1</a>
       </div>
       <div>基于 GPLv3 开源 · 仅供学习交流 · 请遵守学校规定</div>
     </footer>
+  </div>
+
+  <!-- 多用户排队：服务器最多同时运行 8 个任务 -->
+  <div class="queue-card" id="queueCard" hidden role="status" aria-live="polite">
+    <div class="queue-card__title">服务器排队中</div>
+    <div class="queue-card__big" id="queuePosition">第 1 位</div>
+    <p class="queue-card__text" id="queueText">当前有 8 个用户正在使用，服务器最多同时运行 8 个任务。</p>
+    <button class="btn btn--sm" id="queueCancelBtn" type="button">取消排队</button>
   </div>
 
   <!-- 运行中的大号倒计时：剩余时间 + 禁止关闭浏览器的强提醒 -->
@@ -326,16 +479,58 @@
   </div>
 
   <!-- 任务完成置顶弹窗 -->
-  <div class="modal done-modal" id="doneModal" hidden>
-    <div class="modal__panel done-panel" id="donePanel" role="dialog" aria-modal="true" aria-labelledby="doneTitle">
+  <div class="modal done-modal" id="resumeModal" hidden>
+      <div class="modal__panel done-panel" role="dialog" aria-modal="true" aria-labelledby="resumeTitle">
+        <div class="done-icon">⏯</div>
+        <h2 class="done-title" id="resumeTitle">发现未完成的一键任务</h2>
+        <p class="done-sub" id="resumeSub"></p>
+        <div class="modal__foot done-foot">
+          <button class="btn" type="button" data-close="resumeModal">取消</button>
+          <button class="btn" id="resumeRestart" type="button">重新开始</button>
+          <button class="btn btn--primary" id="resumeContinue" type="button">继续上次</button>
+        </div>
+      </div>
+    </div>
+
+  <div class="modal done-modal" id="kickModal" hidden>
+      <div class="modal__panel done-panel is-warn" role="dialog" aria-modal="true" aria-labelledby="kickTitle">
+        <div class="done-icon" id="kickIcon">!</div>
+        <h2 class="done-title" id="kickTitle">账号已在其他设备登录</h2>
+        <p class="done-sub" id="kickSub">你的账号刚刚在另一个浏览器或设备登录，当前页面已被踢下线。只有最新登录的浏览器可以继续使用。</p>
+        <div class="modal__foot done-foot">
+          <button class="btn btn--primary" type="button" data-close="kickModal">知道了</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal done-modal" id="doneModal" hidden>    <div class="modal__panel done-panel" id="donePanel" role="dialog" aria-modal="true" aria-labelledby="doneTitle">
       <div class="done-icon" id="doneIcon">✓</div>
       <h2 class="done-title" id="doneTitle">任务完成</h2>
       <p class="done-sub" id="doneSub"></p>
       <div class="done-body" id="doneBody"></div>
-      <p class="done-note">ℹ️ 刷时长的数据 WeLearn 需要 1–15 分钟更新，刷新课程/小节后如果暂时没看到变化，请稍等再查看，不是没有生效。</p>
+      <p class="done-note">ℹ️ 有效时长 = 各章节实际提交时长之和（不是并发墙钟时间）。WeLearn 的时长数据需要 1–15 分钟更新，刷新课程/小节后如果暂时没看到变化，请稍等再查看。</p>
       <div class="modal__foot done-foot">
         <button class="btn btn--sm" id="doneLogBtn" type="button">查看日志</button>
         <button class="btn btn--primary" type="button" data-close="doneModal">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 管理员验证：并发/顺序 -->
+  <div class="modal" id="debugModal" hidden>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="debugTitle">
+      <div class="modal__head">
+        <h3 class="modal__title" id="debugTitle">管理员验证</h3>
+        <button class="icon-btn" type="button" data-close="debugModal" aria-label="关闭">×</button>
+      </div>
+      <div class="modal__body">
+        <p class="hint">并发 / 顺序设置需要管理员密码，密码只用于本次会话解锁。</p>
+        <input id="debugPassword" type="password" autocomplete="current-password" placeholder="管理员密码" />
+        <p class="form-error" id="debugError" hidden></p>
+      </div>
+      <div class="modal__foot">
+        <button class="btn btn--sm" type="button" data-close="debugModal">取消</button>
+        <button class="btn btn--primary" id="debugSubmitBtn" type="button">解锁</button>
       </div>
     </div>
   </div>
@@ -378,6 +573,21 @@
     </div>
   </div>
 
+  <!-- 站点公告（仅本站部署） -->
+  <div class="modal" id="announceModal" hidden>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="announceTitle">
+      <div class="modal__head">
+        <h2 class="modal__title" id="announceTitle">网站公告</h2>
+      </div>
+      <div class="modal__body">
+        <p class="announce__text" id="announceText"></p>
+      </div>
+      <div class="modal__foot">
+        <button class="btn btn--primary" id="announceBtn" type="button" disabled>我已阅读</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Cookie 解析 -->
   <div class="modal" id="cookieModal" hidden>
     <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="cookieTitle">
@@ -402,7 +612,10 @@
     <div style="padding:24px;text-align:center">本控制台需要启用 JavaScript 才能运行。</div>
   </noscript>
 
-  <script src="common.js?v=2026.11.11-9"></script>
-  <script src="app.js?v=2026.11.11-9"></script>
+  <script src="common.js?v=<?= $APP_BUILD ?>"></script>
+  <script src="js/core.js?v=<?= $APP_BUILD ?>"></script>
+  <script src="js/runner.js?v=<?= $APP_BUILD ?>"></script>
+  <script src="js/ui.js?v=<?= $APP_BUILD ?>"></script>
+  <script src="js/app.js?v=<?= $APP_BUILD ?>"></script>
 </body>
 </html>
